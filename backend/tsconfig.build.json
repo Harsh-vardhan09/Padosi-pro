@@ -1,0 +1,8 @@
+{
+  // Narrower than tsconfig.json so tests stay out of dist.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src"
+  },
+  "include": ["src"]
+}

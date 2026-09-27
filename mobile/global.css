@@ -1,0 +1,11 @@
+@import "tailwindcss";
+@import "nativewind/theme";
+
+@source "./App.tsx";
+@source "./src/**/*.{ts,tsx}";
+
+@theme {
+  --color-primary: #155c49;
+  --color-ink: #101613;
+  --color-muted: #5c6b65;
+}

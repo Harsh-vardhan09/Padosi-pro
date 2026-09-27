@@ -1,0 +1,36 @@
+# dependencies
+node_modules/
+
+# secrets — never commit real env files (see backend/.env.example)
+.env
+.env.*
+!.env.example
+
+# builds
+dist/
+build/
+web-build/
+*.tsbuildinfo
+
+# expo
+.expo/
+.expo-shared/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# logs
+*.log
+npm-debug.log*
+
+# os / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/settings.json
+
+# test / coverage
+coverage/
