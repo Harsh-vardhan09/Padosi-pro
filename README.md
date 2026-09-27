@@ -24,7 +24,68 @@ docker compose up
 - Health check: `curl http://localhost:4000/health` → `{"ok":true}`
 - Postgres: `localhost:5432` (user `padosi`, password `padosi`, db `padosipro`)
 
-Stop with `Ctrl+C`; `docker compose down -v` also removes the database volume.
+The API container runs `prisma migrate deploy` and the seed before it starts listening, so the
+database is ready as soon as it reports healthy. Stop with `Ctrl+C`; `docker compose down -v` also
+removes the database volume, and the next `up` rebuilds everything from scratch.
+
+## Verify the schema and seed
+
+Against the local Docker Postgres:
+
+```bash
+# 7 tables: users, email_otps, profiles, task_categories, tasks, user_tasks, _prisma_migrations
+docker compose exec db psql -U padosi -d padosipro -c '\dt'
+
+# which migrations have been applied
+docker compose exec db psql -U padosi -d padosipro -c 'table _prisma_migrations'
+
+# 6 categories, 28 tasks
+docker compose exec db psql -U padosi -d padosipro -c "
+  select c.sort_order, c.name as category, count(t.id) as tasks
+  from task_categories c left join tasks t on t.category_id = c.id
+  group by c.id, c.sort_order, c.name order by c.sort_order;"
+```
+
+Against whatever `backend/.env` points at (Supabase included), with no psql needed:
+
+```bash
+cd backend
+npx prisma migrate status     # every migration applied?
+npm run prisma:studio         # browse the tables in a browser
+```
+
+Expected: **6 categories / 28 tasks**. The seed is idempotent — it upserts, so re-running
+`npm run db:seed` leaves the counts unchanged and refreshes any edited description.
+
+## Database workflow
+
+```bash
+cd backend
+npm run prisma:generate   # regenerate the typed client after editing the schema
+npm run prisma:migrate    # create + apply a migration in development
+npm run prisma:deploy     # apply existing migrations (CI, containers, Supabase)
+npm run db:seed           # idempotent catalogue seed
+npm run prisma:studio     # browse the data
+npm run db:reset          # drop, re-migrate and re-seed (destructive)
+```
+
+The schema lives in [`backend/prisma/schema.prisma`](backend/prisma/schema.prisma). Prisma cannot
+express CHECK constraints, so the lowercase-email and `+91` mobile checks are appended by hand to
+`prisma/migrations/*/migration.sql`.
+
+### Pointing at Supabase
+
+Supabase's direct host (`db.<ref>.supabase.co`) resolves to **IPv6 only**. On an IPv4-only network
+it fails with `ENOTFOUND`, so use the **session pooler** connection string instead — port 5432, user
+`postgres.<project-ref>`, host `aws-0-<region>.pooler.supabase.com`. Copy it from the Supabase
+dashboard: *Connect → Session pooler*. Set `DB_SSL=true` alongside it. Avoid the transaction pooler
+(6543) for migrations; it disables the prepared statements Prisma Migrate needs.
+
+```bash
+cd backend
+npm run prisma:deploy
+npm run db:seed
+```
 
 ## Run it without Docker
 
@@ -32,6 +93,7 @@ Stop with `Ctrl+C`; `docker compose down -v` also removes the database volume.
 npm run setup                      # installs backend + mobile deps
 
 cp backend/.env.example backend/.env
+docker compose up -d db            # or point DATABASE_URL at your own Postgres
 npm run dev                        # API on http://localhost:4000
 ```
 
@@ -72,4 +134,16 @@ Run from the repo root; each delegates to `backend/` and `mobile/`.
 ## Environment
 
 Every variable the server reads is listed with a comment in
-[`backend/.env.example`](backend/.env.example). Real values never get committed.
+[`backend/.env.example`](backend/.env.example). Real values never get committed. The server
+validates all of them at boot and refuses to start with a message naming each bad variable.
+
+| Variable | Notes |
+| --- | --- |
+| `DATABASE_URL` | Plain Postgres connection string — local Docker or Supabase. |
+| `DB_SSL` | `false` for local Docker, `true` for Supabase. |
+| `JWT_SECRET` / `JWT_EXPIRES_IN` | Token signing key (min 16 chars) and lifetime, default `7d`. |
+| `OTP_PEPPER` | Server-side secret mixed into the OTP hash (min 16 chars). |
+| `MAIL_DRIVER` | `console` (default) logs the OTP; `emailjs` sends real mail and then requires the four `EMAILJS_*` values. |
+
+With the default `MAIL_DRIVER=console`, OTPs are printed to `docker compose logs api` — no email
+account needed to run the flow.

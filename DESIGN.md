@@ -27,6 +27,15 @@ live on the server, so nothing secret ships inside the bundle.
 | zod validates every input, including env | One validation style for bodies, params, and configuration; parsing at the boundary means handlers work with typed data. |
 | Single error shape `{ error: { code, message, fields? } }` | The app branches on `code`, shows `message`, and highlights `fields` — no per-endpoint error parsing. |
 | Express app built by a factory with no side effects | Tests create an app without binding a port. |
+| Prisma as the data layer, over a plain connection string | One schema file is the single source of truth for both the database and the TypeScript types, so a column rename is a compile error rather than a runtime one. Still no `supabase-js`: Prisma 7 talks to Postgres through the `@prisma/adapter-pg` driver adapter. |
+| `prisma migrate deploy` + seed run in the container's start command | `docker compose up` stays the only command a reviewer needs, while migrations remain reviewable SQL files in git rather than an implicit `db push`. |
+| Seed uses `upsert`, and runs on every boot | Re-running is safe and refreshes edited descriptions, so fixing catalogue copy needs no new migration. |
+| Constraints in the database, not only in zod | `email = lower(email)` and `mobile ~ '^\+91[0-9]{10}$'` are appended by hand to the generated migration, because Prisma's schema language cannot express CHECK. Unique and composite keys come from the schema. They hold even if a bug bypasses the API layer. |
+| Supabase reached through the **session pooler**, not the direct host | `db.<ref>.supabase.co` is IPv6-only and unreachable from an IPv4 network; the session pooler is IPv4 and, unlike the transaction pooler on 6543, keeps the prepared statements Prisma Migrate needs. |
+| `token_version` on `users` | Lets logout-everywhere and password changes invalidate old JWTs without a token blocklist table. |
+| OTP stored as a hash with a server-side `OTP_PEPPER` | A leaked `email_otps` table is not brute-forceable offline: 6 digits alone would fall in milliseconds. |
+| `DB_SSL` toggle instead of sniffing the connection string | Supabase needs TLS, local Docker has none; one explicit flag beats guessing from the host name. |
+| `MAIL_DRIVER=console` by default | A reviewer can complete the OTP flow from the server log without an EmailJS account. |
 | Tailwind in the app via NativeWind v5 | One styling vocabulary shared with the web world, compiled to real `StyleSheet` objects at build time. Still native views — no WebView. |
 | Brand tokens in `mobile/global.css`, not a JS colours file | `@theme` makes `--color-primary` available as `text-primary` / `bg-primary`, so there is one source of truth instead of two. |
 

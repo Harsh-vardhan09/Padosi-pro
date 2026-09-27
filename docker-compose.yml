@@ -14,8 +14,6 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # *.sql in this directory runs once, when the volume is first created.
-      - ./backend/db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U padosi -d padosipro"]
       interval: 5s
@@ -29,7 +27,12 @@ services:
       PORT: 4000
       # `db` is the service name above; Compose resolves it on the shared network.
       DATABASE_URL: postgres://padosi:padosi@db:5432/padosipro
-      # Empty is treated as unset, so the stack runs without EmailJS credentials.
+      DB_SSL: "false"
+      JWT_SECRET: local-dev-only-jwt-secret-change-me
+      JWT_EXPIRES_IN: 7d
+      OTP_PEPPER: local-dev-only-otp-pepper-change-me
+      # console prints the OTP to `docker compose logs api`; set to emailjs with the keys below.
+      MAIL_DRIVER: ${MAIL_DRIVER:-console}
       EMAILJS_SERVICE_ID: ${EMAILJS_SERVICE_ID:-}
       EMAILJS_TEMPLATE_ID: ${EMAILJS_TEMPLATE_ID:-}
       EMAILJS_PUBLIC_KEY: ${EMAILJS_PUBLIC_KEY:-}

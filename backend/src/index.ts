@@ -1,10 +1,9 @@
 import 'dotenv/config';
 import { createApp } from './app.js';
-import { loadEnv } from './env.js';
+import { config } from './config.js';
 
-const env = loadEnv();
-const app = createApp();
+const { PORT, NODE_ENV } = config();
 
-app.listen(env.PORT, () => {
-  console.log(`PadosiPro API listening on http://localhost:${env.PORT} (${env.NODE_ENV})`);
+createApp().listen(PORT, () => {
+  console.log(`PadosiPro API listening on http://localhost:${PORT} (${NODE_ENV})`);
 });

@@ -1,0 +1,77 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email        String     @unique
+  passwordHash String     @map("password_hash")
+  isVerified   Boolean    @default(false) @map("is_verified")
+  tokenVersion Int        @default(0) @map("token_version")
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  otp          EmailOtp?
+  profile      Profile?
+  tasks        UserTask[]
+
+  @@map("users")
+}
+
+model EmailOtp {
+  userId     String    @id @map("user_id") @db.Uuid
+  codeHash   String    @map("code_hash")
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(3)
+  attempts   Int       @default(0)
+  lastSentAt DateTime  @default(now()) @map("last_sent_at") @db.Timestamptz(3)
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(3)
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("email_otps")
+}
+
+model Profile {
+  userId       String   @id @map("user_id") @db.Uuid
+  fullName     String   @map("full_name")
+  mobile       String
+  address      String
+  businessName String?  @map("business_name")
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("profiles")
+}
+
+model TaskCategory {
+  id        Int    @id @default(autoincrement())
+  name      String @unique
+  sortOrder Int    @map("sort_order")
+  tasks     Task[]
+
+  @@map("task_categories")
+}
+
+model Task {
+  id          Int          @id @default(autoincrement())
+  categoryId  Int          @map("category_id")
+  name        String
+  description String
+  category    TaskCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  users       UserTask[]
+
+  @@unique([categoryId, name])
+  @@map("tasks")
+}
+
+model UserTask {
+  userId    String   @map("user_id") @db.Uuid
+  taskId    Int      @map("task_id")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@id([userId, taskId])
+  @@map("user_tasks")
+}

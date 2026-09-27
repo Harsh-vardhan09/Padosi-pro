@@ -10,7 +10,7 @@ Project rules for every session. Read before writing code.
 ## Repo layout
 | Path | What it is |
 | --- | --- |
-| `backend/` | Node.js + TypeScript + Express API. PostgreSQL via `pg` and a plain connection string. |
+| `backend/` | Node.js + TypeScript + Express API. PostgreSQL via Prisma over a plain connection string. |
 | `mobile/` | Expo (React Native) + TypeScript app. |
 | `docker-compose.yml` | Local Postgres 16 + the API. `docker compose up` must be the only command a reviewer needs. |
 | `ASSIGNMENT.md` | The take-home brief (source of truth for scope). |
@@ -18,7 +18,9 @@ Project rules for every session. Read before writing code.
 
 ## Stack constraints (fixed — do not swap)
 - Backend: Node.js, TypeScript, Express.
-- Database: PostgreSQL, hosted on Supabase, used as **plain Postgres via a connection string**. Do **not** use `supabase-js`, Supabase Auth, or RLS-based auth.
+- Database: PostgreSQL, hosted on Supabase, reached with **Prisma over a plain connection string**
+  (Prisma 7 + the `@prisma/adapter-pg` driver adapter). Do **not** use `supabase-js`, Supabase Auth,
+  or RLS-based auth.
 - OTP email: **EmailJS REST API**, called server-side only. EmailJS keys never reach the mobile app.
 - Mobile: Expo + TypeScript. **No WebViews** — every screen is native React Native.
 - Mobile styling: **Tailwind via NativeWind** (`className`). Do not use `StyleSheet.create` or inline
@@ -39,7 +41,10 @@ Project rules for every session. Read before writing code.
   - `message`: safe to show a user. Never leak stack traces, SQL, or provider payloads.
   - `fields`: optional, only for per-field validation errors.
 - Errors are thrown as typed `AppError`s and serialised by the single error middleware. Handlers do not build error JSON themselves.
-- SQL uses parameterised queries only (`$1`, `$2`). No string interpolation into SQL, ever.
+- Database access goes through Prisma Client. Schema changes are a migration (`npm run prisma:migrate`),
+  never a hand-edited table; the generated SQL is reviewed before it is applied.
+- If raw SQL is ever unavoidable, use `prisma.$queryRaw` with a tagged template so values are
+  parameterised. Never interpolate a value into a SQL string.
 
 ## Secrets
 - Never commit secrets. No keys in code, tests, fixtures, or committed config.
