@@ -101,6 +101,85 @@ npm run dev                        # API on http://localhost:4000
 Supabase project (Project Settings → Database → Connection string → URI). We talk
 to Supabase as plain Postgres over that connection string — no `supabase-js`.
 
+## Auth API
+
+All routes are under `/api/auth` and rate limited to 30 requests per 15 minutes per IP.
+
+| Route | Body | Success | Notable failures |
+| --- | --- | --- | --- |
+| `POST /register` | `{ email, password }` | `201` + `otpExpiresAt`, `resendAvailableAt` | `409 EMAIL_TAKEN`, `400 VALIDATION_ERROR` |
+| `POST /verify-otp` | `{ email, code }` | `200` + `{ token, user }` (auto-login) | `400 OTP_INVALID` (+`details.attemptsLeft`), `400 OTP_EXPIRED`, `429 OTP_LOCKED`, `409 OTP_ALREADY_USED` |
+| `POST /resend-otp` | `{ email }` | `200` + `otpExpiresAt`, `resendAvailableAt` | `429 OTP_COOLDOWN` (+`details.retryAfterSeconds`) |
+| `POST /login` | `{ email, password }` | `200` + `{ token, user }` | `401 INVALID_CREDENTIALS`, `403 EMAIL_NOT_VERIFIED` |
+| `POST /logout` | — (Bearer token) | `200 { ok: true }` | `401 TOKEN_REVOKED` / `TOKEN_INVALID` |
+
+Passwords need 8+ characters with a letter and a number, and are stored with bcrypt cost 12.
+Codes are 6 digits, valid 10 minutes, single use, 5 wrong attempts before the code locks, and a
+30-second resend cooldown. Only `HMAC-SHA256(code, OTP_PEPPER)` is stored — never the code.
+Registering again with an unverified email updates the password and resends, respecting the cooldown.
+
+`POST /logout` increments `token_version`, so every token issued before it stops working.
+
+### Smoke test
+
+With the stack running, this walks register → verify → login → logout and asserts every status:
+
+```bash
+./scripts/smoke-auth.sh                       # throwaway email, code read from the API log
+./scripts/smoke-auth.sh you@example.com       # a real inbox (needs MAIL_DRIVER=emailjs)
+```
+
+## Email (OTP delivery)
+
+`MAIL_DRIVER=console` (the default) prints the code to the server log — nothing to configure:
+
+```bash
+docker compose logs api | grep 'mail:console'
+# [mail:console] OTP for you@example.com: 296189 (valid 10 minutes)
+```
+
+### Setting up EmailJS for real mail
+
+1. **Create an account** at [emailjs.com](https://www.emailjs.com) and sign in.
+2. **Add an email service.** *Email Services → Add New Service* → pick your provider (Gmail is
+   quickest; it opens an OAuth consent screen). Copy the **Service ID** — it looks like
+   `service_ab12cde` → `EMAILJS_SERVICE_ID`.
+3. **Create the template.** *Email Templates → Create New Template*. The server sends exactly three
+   `template_params`, so use these names verbatim:
+
+   | Template variable | What the server sends |
+   | --- | --- |
+   | `{{to_email}}` | the recipient's address |
+   | `{{otp_code}}` | the 6-digit code |
+   | `{{expiry_minutes}}` | `10` |
+
+   In the template's **Settings → To Email** field put `{{to_email}}`, otherwise EmailJS sends every
+   code to your own address. Subject: `Your PadosiPro verification code`. Body, for example:
+
+   > Your PadosiPro verification code is **{{otp_code}}**.
+   > It expires in {{expiry_minutes}} minutes. You don't manage tasks — we do.
+
+   Copy the **Template ID** (`template_xy34zab`) → `EMAILJS_TEMPLATE_ID`.
+4. **Copy the keys.** *Account → General → Public Key* → `EMAILJS_PUBLIC_KEY`.
+   *Account → Security → Private Key* → `EMAILJS_PRIVATE_KEY`.
+5. **Allow non-browser use — this is the step people miss.** *Account → Security* → tick
+   **"Allow EmailJS API for non-browser applications"**. EmailJS blocks server-side calls by
+   default and returns `403 API calls are disabled for non-browser applications`, which our API
+   surfaces as `502 MAIL_FAILED`. While you are on that screen, leave **Use Private Key** enabled
+   so the `accessToken` we send is accepted.
+6. **Switch the driver** in `backend/.env` and restart:
+
+   ```bash
+   MAIL_DRIVER=emailjs
+   EMAILJS_SERVICE_ID=service_ab12cde
+   EMAILJS_TEMPLATE_ID=template_xy34zab
+   EMAILJS_PUBLIC_KEY=...
+   EMAILJS_PRIVATE_KEY=...
+   ```
+
+   The server refuses to boot on `MAIL_DRIVER=emailjs` with any of the four missing, naming each one.
+   Keys stay server-side; the mobile app never sees them.
+
 ## Mobile app
 
 ```bash

@@ -36,6 +36,14 @@ live on the server, so nothing secret ships inside the bundle.
 | OTP stored as a hash with a server-side `OTP_PEPPER` | A leaked `email_otps` table is not brute-forceable offline: 6 digits alone would fall in milliseconds. |
 | `DB_SSL` toggle instead of sniffing the connection string | Supabase needs TLS, local Docker has none; one explicit flag beats guessing from the host name. |
 | `MAIL_DRIVER=console` by default | A reviewer can complete the OTP flow from the server log without an EmailJS account. |
+| Business rules are pure functions taking `now: Date` | `src/services/otp.ts` and `auth.ts` hold every rule (expiry, attempt limits, cooldown, login outcomes) with no clock, no database and no HTTP. That is why the OTP tests need no fakes and run in milliseconds. |
+| Prisma access confined to `src/repositories/` | Routes and services stay readable and testable; swapping a query never touches a rule. |
+| OTP stored as `HMAC-SHA256(code, OTP_PEPPER)`, compared with `timingSafeEqual` | The pepper means a leaked table is not brute-forceable offline, and the constant-time compare removes the byte-by-byte timing signal. |
+| `token_version` bumped on logout | Logout kills every issued token with one integer, no blocklist table and no session store to clean up. |
+| Unknown email still burns a bcrypt comparison | Without it, "no such user" returns in ~1ms while a wrong password takes ~300ms, which enumerates accounts. |
+| Wrong password on an unverified account returns `INVALID_CREDENTIALS`, not `EMAIL_NOT_VERIFIED` | Otherwise the error itself confirms an address is registered. |
+| bcryptjs rather than native `bcrypt` | Same algorithm and hash format, no node-gyp toolchain in the Alpine image or on Windows. Cost 12 keeps it ~300ms per hash. |
+| A consumed code reports `OTP_ALREADY_USED` before `EMAIL_ALREADY_VERIFIED` | Re-submitting the code that just verified an account should say precisely that, which also keeps the single-use rule observable from the API. |
 | Tailwind in the app via NativeWind v5 | One styling vocabulary shared with the web world, compiled to real `StyleSheet` objects at build time. Still native views — no WebView. |
 | Brand tokens in `mobile/global.css`, not a JS colours file | `@theme` makes `--color-primary` available as `text-primary` / `bg-primary`, so there is one source of truth instead of two. |
 
@@ -54,7 +62,7 @@ live on the server, so nothing secret ships inside the bundle.
 ## To document
 
 - [ ] Data model and migrations
-- [ ] Auth / OTP flow, including expiry and retry limits
+- [x] Auth / OTP flow, including expiry and retry limits
 - [ ] API reference
 - [ ] Mobile navigation and state
 - [ ] Trade-offs and what I'd do with more time

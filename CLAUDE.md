@@ -35,11 +35,13 @@ Project rules for every session. Read before writing code.
 - **Every** external input (body, query, params, headers, env) is validated with **zod**. Handlers receive already-parsed, typed data.
 - One error shape for every failure response:
   ```json
-  { "error": { "code": "VALIDATION_ERROR", "message": "Human-readable summary", "fields": { "email": "Must be a valid email" } } }
+  { "error": { "code": "OTP_INVALID", "message": "That code is not right.", "details": { "attemptsLeft": 4 } } }
   ```
   - `code`: stable `SCREAMING_SNAKE_CASE` string the client can branch on.
   - `message`: safe to show a user. Never leak stack traces, SQL, or provider payloads.
-  - `fields`: optional, only for per-field validation errors.
+  - `fields`: optional, only for per-field validation errors (`{ "email": "Enter a valid email" }`).
+  - `details`: optional machine-readable extras the client needs to act on, e.g. `attemptsLeft`
+    or `retryAfterSeconds`. Flat string/number values only — never free-form nested data.
 - Errors are thrown as typed `AppError`s and serialised by the single error middleware. Handlers do not build error JSON themselves.
 - Database access goes through Prisma Client. Schema changes are a migration (`npm run prisma:migrate`),
   never a hand-edited table; the generated SQL is reviewed before it is applied.
@@ -55,6 +57,15 @@ Project rules for every session. Read before writing code.
 - Small, readable files. One clear responsibility per file; split before a file gets sprawling.
 - Plain, explicit code over clever code. **I must be able to explain every line in an interview** — if a line needs a paragraph of justification, pick the simpler version.
 - No speculative abstraction: no layer, helper, or config flag added for a requirement that does not exist yet.
+
+## Auth conventions
+- Business rules live in pure functions under `src/services/` that take `now: Date` — never
+  `new Date()` inside them, so every rule is testable without faking the clock.
+- All SQL/Prisma access lives in `src/repositories/`. Services and routes never touch the client.
+- Passwords: bcrypt cost 12. An unknown email still burns a bcrypt comparison so login timing
+  cannot be used to enumerate accounts.
+- OTPs: only `HMAC-SHA256(code, OTP_PEPPER)` is stored, compared with `timingSafeEqual`.
+- JWTs carry `{ sub, tv }`; `tv` must equal the user's `token_version` or the token is rejected.
 
 ## Comments
 - **Do not write useless comments.** No comment that restates what the code already says, no

@@ -22,7 +22,11 @@ const configSchema = z
     DB_SSL: boolFromString,
 
     JWT_SECRET: z.string().min(16),
-    JWT_EXPIRES_IN: z.string().min(1).default('7d'),
+    // Shape is checked here so lib/jwt.ts can hand it to jsonwebtoken's narrow option type.
+    JWT_EXPIRES_IN: z
+      .string()
+      .regex(/^[0-9]+[smhd]$/, 'Use a duration like 15m, 24h or 7d')
+      .default('7d'),
     OTP_PEPPER: z.string().min(16),
 
     MAIL_DRIVER: z.enum(['emailjs', 'console']).default('console'),
