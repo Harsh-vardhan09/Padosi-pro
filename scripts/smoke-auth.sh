@@ -18,22 +18,23 @@ PASSWORD="${PASSWORD:-Passw0rd123}"
 step() { echo >&2; echo "== $1" >&2; }
 
 # Prints the response body on stdout and the progress on stderr, so a command substitution around
-# this function captures JSON only. Exits if the status is not the one we expect.
-post() {
-  local path="$1" expected="$2" payload="$3" auth="${4:-}"
+# these helpers captures JSON only. Exits if the status is not the one we expect.
+request() {
+  local method="$1" path="$2" expected="$3" payload="$4" auth="${5:-}"
   local response status body
 
-  response=$(curl -sS -X POST "$API$path" \
+  response=$(curl -sS -X "$method" "$API$path" \
     -H 'Content-Type: application/json' \
     ${auth:+-H "Authorization: Bearer $auth"} \
-    -d "$payload" \
+    ${payload:+-d "$payload"} \
     -w $'\n%{http_code}')
 
   status="${response##*$'\n'}"
   body="${response%$'\n'*}"
 
-  echo "   POST $path -> $status (expected $expected)" >&2
-  echo "$body" | sed 's/^/     /' >&2
+  printf '   %-4s %s -> %s (expected %s)\n' "$method" "$path" "$status" "$expected" >&2
+  # Truncated so a long response (the whole task catalogue) stays readable in the transcript.
+  echo "$body" | cut -c1-300 | sed 's/^/     /' >&2
 
   if [ "$status" != "$expected" ]; then
     echo "   FAILED: expected $expected, got $status" >&2
@@ -42,6 +43,10 @@ post() {
 
   printf '%s' "$body"
 }
+
+post() { request POST "$1" "$2" "$3" "${4:-}"; }
+put() { request PUT "$1" "$2" "$3" "${4:-}"; }
+get() { request GET "$1" "$2" '' "${3:-}"; }
 
 field() { python -c "import json,sys;print(json.load(sys.stdin)$1)"; }
 
@@ -91,9 +96,65 @@ post /api/auth/login 401 "{\"email\":\"$EMAIL\",\"password\":\"WrongPass123\"}" 
 step "11. An unknown email gives the identical error"
 post /api/auth/login 401 '{"email":"nobody@example.com","password":"WrongPass123"}' > /dev/null
 
-step "12. Logout invalidates every existing token"
+step "12. The authenticated routes need a token"
+get /api/me 401 > /dev/null
+
+step "13. GET /api/me before the profile exists"
+get /api/me 200 "$TOKEN" | field "['profile']" > /dev/null
+get /api/profile 200 "$TOKEN" > /dev/null
+
+step "14. The profile form is validated"
+put /api/profile 400 '{"fullName":"A","mobile":"12345","address":"short"}' "$TOKEN" > /dev/null
+
+step "15. Save the profile (messy mobile is normalised)"
+put /api/profile 200 \
+  '{"fullName":"Asha Menon","mobile":"+91 98765 43210","address":"12 MG Road, Bengaluru 560001"}' \
+  "$TOKEN" | field "['profile']['mobile']" > /dev/null
+
+step "16. Business name is optional and clears when omitted"
+put /api/profile 200 \
+  '{"fullName":"Asha Menon","mobile":"9876543210","address":"12 MG Road, Bengaluru 560001","businessName":"Menon Textiles"}' \
+  "$TOKEN" > /dev/null
+put /api/profile 200 \
+  '{"fullName":"Asha Menon","mobile":"9876543210","address":"12 MG Road, Bengaluru 560001"}' \
+  "$TOKEN" > /dev/null
+
+step "17. The task catalogue"
+CATALOGUE=$(get /api/tasks 200 "$TOKEN")
+TASK_A=$(printf '%s' "$CATALOGUE" | field "['categories'][0]['tasks'][0]['id']")
+TASK_B=$(printf '%s' "$CATALOGUE" | field "['categories'][1]['tasks'][0]['id']")
+printf '   %s categories, picking task ids %s and %s\n' \
+  "$(printf '%s' "$CATALOGUE" | field "['categories'].__len__()")" "$TASK_A" "$TASK_B" >&2
+
+step "18. An empty selection is refused"
+put /api/me/tasks 400 '{"taskIds":[]}' "$TOKEN" > /dev/null
+
+step "19. Duplicate ids are refused"
+put /api/me/tasks 400 "{\"taskIds\":[$TASK_A,$TASK_A]}" "$TOKEN" > /dev/null
+
+step "20. Unknown ids are listed back"
+put /api/me/tasks 400 "{\"taskIds\":[$TASK_A,999999,888888]}" "$TOKEN" > /dev/null
+
+step "21. Save the selection"
+put /api/me/tasks 200 "{\"taskIds\":[$TASK_A,$TASK_B]}" "$TOKEN" > /dev/null
+
+step "22. Read it back, and /api/me now counts it"
+get /api/me/tasks 200 "$TOKEN" > /dev/null
+get /api/me 200 "$TOKEN" | field "['selectedTaskCount']" > /dev/null
+
+step "23. Saving again replaces rather than appends"
+put /api/me/tasks 200 "{\"taskIds\":[$TASK_B]}" "$TOKEN" > /dev/null
+COUNT=$(get /api/me 200 "$TOKEN" | field "['selectedTaskCount']")
+if [ "$COUNT" != "1" ]; then
+  echo "   FAILED: selection should have been replaced, count is $COUNT" >&2
+  exit 1
+fi
+echo "   selectedTaskCount is 1, so the previous choice was replaced" >&2
+
+step "24. Logout invalidates every existing token"
 post /api/auth/logout 200 '{}' "$TOKEN" > /dev/null
 post /api/auth/logout 401 '{}' "$TOKEN" > /dev/null
+get /api/me 401 "$TOKEN" > /dev/null
 
 echo >&2
 echo "All auth flows behaved as expected." >&2

@@ -120,9 +120,33 @@ Registering again with an unverified email updates the password and resends, res
 
 `POST /logout` increments `token_version`, so every token issued before it stops working.
 
+## Authenticated API
+
+Everything below needs `Authorization: Bearer <token>`.
+
+| Route | Body | Returns |
+| --- | --- | --- |
+| `GET /api/me` | — | `{ user, profile \| null, selectedTaskCount }` |
+| `GET /api/profile` | — | `{ profile }`, or `{ profile: null }` before the first save |
+| `PUT /api/profile` | `{ fullName, mobile, address, businessName? }` | `{ profile }` |
+| `GET /api/tasks` | — | `{ categories: [{ id, name, sortOrder, tasks }] }`, categories in `sortOrder` |
+| `GET /api/me/tasks` | — | `{ tasks }`, each with `categoryId` and `categoryName` |
+| `PUT /api/me/tasks` | `{ taskIds: number[] }` | `{ tasks }` — replaces the whole selection |
+
+Profile rules: `fullName` 2–80 characters (letters, spaces, `.`, `'`, `-`; any script, so Devanagari
+works), `address` 10–300 characters, `businessName` optional up to 100. `mobile` accepts what people
+actually type — `9876543210`, `+919876543210`, `+91 98765 43210`, `098765-43210` — and is stored as
+`+91XXXXXXXXXX`, rejecting anything whose first digit is below 6. Omitting `businessName` on a `PUT`
+clears a stored one, so the saved profile always matches the form that was submitted.
+
+Task selection needs at least one id, rejects duplicates (`DUPLICATE_TASK_IDS`) and unknown ids
+(`UNKNOWN_TASK_IDS` — the offending ids are listed in `fields.taskIds`), and replaces the previous
+selection inside one transaction.
+
 ### Smoke test
 
-With the stack running, this walks register → verify → login → logout and asserts every status:
+With the stack running, this walks register → verify → login → profile → task selection → logout,
+asserting the status of all 24 steps:
 
 ```bash
 ./scripts/smoke-auth.sh                       # throwaway email, code read from the API log

@@ -43,6 +43,11 @@ live on the server, so nothing secret ships inside the bundle.
 | Unknown email still burns a bcrypt comparison | Without it, "no such user" returns in ~1ms while a wrong password takes ~300ms, which enumerates accounts. |
 | Wrong password on an unverified account returns `INVALID_CREDENTIALS`, not `EMAIL_NOT_VERIFIED` | Otherwise the error itself confirms an address is registered. |
 | bcryptjs rather than native `bcrypt` | Same algorithm and hash format, no node-gyp toolchain in the Alpine image or on Windows. Cost 12 keeps it ~300ms per hash. |
+| `businessName` is optional | Most PadosiPro customers are households, not businesses. Making it required would force every family to invent one, turning a meaningful blank into junk data we could never trust. The reasoning sits next to the field in `src/routes/profile.ts`. |
+| Mobile numbers normalised to `+91XXXXXXXXXX` on the way in | The app accepts whatever the user types; storage stays one canonical shape, so lookups and display never have to cope with four spellings of the same number. The DB `CHECK` enforces the stored shape. |
+| Full names allow `\p{M}` as well as `\p{L}` | Indic vowel signs are combining marks, not letters, so a letters-only pattern rejects "आशा". A test caught this. |
+| `PUT /api/me/tasks` replaces the selection in a transaction | A half-applied change would leave someone looking at tasks they never chose. Delete-then-insert in one transaction is simpler to reason about than diffing, and the selection is small. |
+| Unknown task ids come back in `fields.taskIds`, not `details` | `details` is documented as flat scalars; a list of bad ids is genuinely a per-field validation message, so it belongs in `fields`. |
 | A consumed code reports `OTP_ALREADY_USED` before `EMAIL_ALREADY_VERIFIED` | Re-submitting the code that just verified an account should say precisely that, which also keeps the single-use rule observable from the API. |
 | Tailwind in the app via NativeWind v5 | One styling vocabulary shared with the web world, compiled to real `StyleSheet` objects at build time. Still native views — no WebView. |
 | Brand tokens in `mobile/global.css`, not a JS colours file | `@theme` makes `--color-primary` available as `text-primary` / `bg-primary`, so there is one source of truth instead of two. |
@@ -63,6 +68,6 @@ live on the server, so nothing secret ships inside the bundle.
 
 - [ ] Data model and migrations
 - [x] Auth / OTP flow, including expiry and retry limits
-- [ ] API reference
+- [x] API reference (README)
 - [ ] Mobile navigation and state
 - [ ] Trade-offs and what I'd do with more time
