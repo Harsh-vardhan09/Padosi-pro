@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   OTP_LENGTH,
   OTP_MAX_ATTEMPTS,
@@ -40,6 +40,30 @@ describe('generateCode', () => {
   it('does not return a constant', () => {
     const codes = new Set(Array.from({ length: 50 }, generateCode));
     expect(codes.size).toBeGreaterThan(1);
+  });
+
+  it('draws from crypto, never from Math.random', () => {
+    const mathRandom = vi.spyOn(Math, 'random');
+    try {
+      for (let i = 0; i < 100; i += 1) generateCode();
+      expect(mathRandom).not.toHaveBeenCalled();
+    } finally {
+      mathRandom.mockRestore();
+    }
+  });
+
+  it('reaches every leading digit, so the range is not truncated', () => {
+    const leading = new Set(Array.from({ length: 1000 }, () => generateCode()[0]));
+    expect(leading.size).toBe(10);
+  });
+
+  it('zero-pads the codes that land below 100000', () => {
+    const padded = Array.from({ length: 1000 }, generateCode).filter((code) =>
+      code.startsWith('0'),
+    );
+
+    expect(padded.length).toBeGreaterThan(0);
+    for (const code of padded) expect(code).toHaveLength(OTP_LENGTH);
   });
 });
 
@@ -146,6 +170,11 @@ describe('resend cooldown', () => {
     expect(after(0)).toBe(OTP_RESEND_COOLDOWN_SECONDS);
     expect(after(500)).toBe(OTP_RESEND_COOLDOWN_SECONDS);
     expect(after(29_001)).toBe(1);
+  });
+
+  it('blocks a resend at 29s and allows it at 30s', () => {
+    expect(cooldownSecondsLeft(NOW, new Date(NOW.getTime() + 29_000))).toBe(1);
+    expect(cooldownSecondsLeft(NOW, new Date(NOW.getTime() + 30_000))).toBe(0);
   });
 
   it('is zero once the window has passed', () => {

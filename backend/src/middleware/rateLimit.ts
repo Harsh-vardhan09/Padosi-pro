@@ -1,4 +1,5 @@
 import rateLimit from 'express-rate-limit';
+import { config } from '../config.js';
 import { AppError } from '../lib/errors.js';
 
 const tooManyRequests = new AppError({
@@ -12,6 +13,8 @@ export const authRateLimit = rateLimit({
   limit: 30,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
+  // Integration tests drive far more than `limit` auth calls from one address in a single run.
+  skip: () => config().NODE_ENV === 'test',
   handler: (_req, res) => {
     res.status(tooManyRequests.status).json(tooManyRequests.toBody());
   },

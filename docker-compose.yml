@@ -20,6 +20,26 @@ services:
       timeout: 5s
       retries: 12
 
+  # Integration tests only: `docker compose --profile test up -d db-test`.
+  # Behind a profile so a plain `docker compose up` still starts just Postgres + the API.
+  db-test:
+    profiles: ["test"]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: padosi
+      POSTGRES_PASSWORD: padosi
+      POSTGRES_DB: padosipro_test
+    ports:
+      - "5433:5432"
+    # No volume: the data lives in tmpfs, so every run starts from an empty database.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U padosi -d padosipro_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
   api:
     build: ./backend
     environment:

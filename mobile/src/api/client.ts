@@ -30,6 +30,16 @@ export class ApiError extends Error {
   }
 }
 
+// A stored token that the server no longer accepts: the session layer registers a handler here so
+// one rejected request signs the user out instead of stranding a screen on a retry that cannot work.
+const TOKEN_ERROR_CODES = ['TOKEN_MISSING', 'TOKEN_INVALID', 'TOKEN_REVOKED'];
+
+let onTokenRejected: (() => void) | null = null;
+
+export function setTokenRejectedHandler(handler: () => void): void {
+  onTokenRejected = handler;
+}
+
 export function asApiError(error: unknown): ApiError {
   if (error instanceof ApiError) return error;
   return new ApiError({ code: 'UNKNOWN_ERROR', message: 'Something went wrong. Please try again.' });
@@ -64,7 +74,7 @@ function errorFromResponse(payload: unknown, status: number): ApiError {
 export async function request<T>(
   path: string,
   schema: z.ZodType<T>,
-  options: { method: 'GET' | 'POST'; body?: unknown; token?: string },
+  options: { method: 'GET' | 'POST' | 'PUT'; body?: unknown; token?: string },
 ): Promise<T> {
   let response: Response;
 
@@ -86,7 +96,11 @@ export async function request<T>(
 
   const payload: unknown = await response.json().catch(() => null);
 
-  if (!response.ok) throw errorFromResponse(payload, response.status);
+  if (!response.ok) {
+    const error = errorFromResponse(payload, response.status);
+    if (TOKEN_ERROR_CODES.includes(error.code)) onTokenRejected?.();
+    throw error;
+  }
 
   const parsed = schema.safeParse(payload);
   if (!parsed.success) {

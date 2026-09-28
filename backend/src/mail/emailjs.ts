@@ -22,8 +22,8 @@ export function createEmailjsMailer(credentials: EmailjsCredentials): Mailer {
           user_id: credentials.publicKey,
           accessToken: credentials.privateKey,
           template_params: {
-            to_email: to,
-            otp_code: code,
+            email: to,
+            otp: code,
             expiry_minutes: expiryMinutes,
           },
         }),

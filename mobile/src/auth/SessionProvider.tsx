@@ -1,6 +1,7 @@
 import * as SecureStore from 'expo-secure-store';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { logout } from '../api/auth';
+import { setTokenRejectedHandler } from '../api/client';
 
 const TOKEN_KEY = 'padosipro.accessToken';
 
@@ -16,6 +17,10 @@ type SessionContextValue = {
 };
 
 const SessionContext = createContext<SessionContextValue | null>(null);
+
+function forgetToken(): Promise<void> {
+  return SecureStore.deleteItemAsync(TOKEN_KEY).catch(() => undefined);
+}
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<SessionState>({ status: 'loading' });
@@ -33,6 +38,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // A revoked or expired token would otherwise strand a screen on an error it can never retry past.
+  useEffect(() => {
+    setTokenRejectedHandler(() => {
+      void forgetToken().then(() => setState({ status: 'signedOut' }));
+    });
+  }, []);
+
   async function signIn(token: string): Promise<void> {
     await SecureStore.setItemAsync(TOKEN_KEY, token);
     setState({ status: 'signedIn', token });
@@ -43,7 +55,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     if (state.status === 'signedIn') {
       await logout(state.token).catch(() => undefined);
     }
-    await SecureStore.deleteItemAsync(TOKEN_KEY).catch(() => undefined);
+    await forgetToken();
     setState({ status: 'signedOut' });
   }
 
