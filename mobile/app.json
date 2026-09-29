@@ -5,7 +5,10 @@
     "version": "0.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
+    "scheme": "padosipro",
     "userInterfaceStyle": "light",
+    "primaryColor": "#155C49",
+    "backgroundColor": "#FFFFFF",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -13,10 +16,11 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.padosipro.app"
+      "bundleIdentifier": "com.padosipro.assignment"
     },
     "android": {
-      "package": "com.padosipro.app",
+      "package": "com.padosipro.assignment",
+      "backgroundColor": "#FFFFFF",
       "adaptiveIcon": {
         "backgroundColor": "#155C49",
         "foregroundImage": "./assets/android-icon-foreground.png",

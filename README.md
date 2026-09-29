@@ -2,195 +2,229 @@
 
 > You don't manage tasks — we do.
 
-Take-home monorepo: an Express + PostgreSQL API and an Expo (React Native) app.
-
-## Layout
+Take-home monorepo: an Express + PostgreSQL API and an Expo (React Native) app covering the first
+user journey — register → verify email by OTP → login → profile → task selection → home.
 
 ```
-backend/            Node.js + TypeScript + Express API
-mobile/             Expo (React Native) + TypeScript app, styled with Tailwind (NativeWind)
+backend/            Node.js + TypeScript + Express API (Prisma, PostgreSQL)
+mobile/             Expo (React Native) + TypeScript app, Tailwind via NativeWind
 docker-compose.yml  Postgres 16 + the API, for a one-command local run
-DESIGN.md           Architecture and decisions
-CLAUDE.md           Project rules
+DESIGN.md           Architecture, trade-offs, what was left out
+ASSIGNMENT.md       The brief this repo answers
 ```
 
-## Run it (one command, no Supabase account)
+---
+
+## 1. Prerequisites
+
+| Tool | Minimum | Verified on | Needed for |
+| --- | --- | --- | --- |
+| Docker Desktop (with Compose v2) | 24 / Compose 2.20 | 29.6.2 / Compose 5.3.1 | The one-command backend. Nothing else required. |
+| Node.js | 20 LTS | 26.5.0 | Running without Docker, the mobile app, tests |
+| npm | 10 | 11.17.0 | ditto |
+| Expo Go app (Android/iOS) | latest | — | Running the app on a physical phone |
+| An Android emulator **or** a phone | — | — | Seeing the app |
+
+Only Docker is needed for the API. Node is needed for the mobile app.
+
+```bash
+docker --version && docker compose version && node -v && npm -v
+```
+
+---
+
+## 2. Backend in one command
 
 ```bash
 docker compose up
 ```
 
+That is the whole setup — no `.env` to write, no database to create, no email account.
+
 - API: <http://localhost:4000>
-- Health check: `curl http://localhost:4000/health` → `{"ok":true}`
+- Health: `curl http://localhost:4000/health` → `{"ok":true}`
 - Postgres: `localhost:5432` (user `padosi`, password `padosi`, db `padosipro`)
 
-The API container runs `prisma migrate deploy` and the seed before it starts listening, so the
-database is ready as soon as it reports healthy. Stop with `Ctrl+C`; `docker compose down -v` also
-removes the database volume, and the next `up` rebuilds everything from scratch.
+The container runs `prisma migrate deploy` and the seed before it listens, so the schema and the
+**6 categories / 28 tasks** catalogue are ready the moment it reports healthy. The compose file
+supplies throwaway local credentials, which is why they can live in git.
 
-## Verify the schema and seed
+Stop with `Ctrl+C`. `docker compose down` removes the containers; add `-v` to drop the database
+volume so the next `up` rebuilds from scratch.
 
-Against the local Docker Postgres:
+**With the default `MAIL_DRIVER=console` no email account is needed** — the OTP is printed to the
+API log. See [§6](#6-how-email-is-sent).
 
-```bash
-# 7 tables: users, email_otps, profiles, task_categories, tasks, user_tasks, _prisma_migrations
-docker compose exec db psql -U padosi -d padosipro -c '\dt'
-
-# which migrations have been applied
-docker compose exec db psql -U padosi -d padosipro -c 'table _prisma_migrations'
-
-# 6 categories, 28 tasks
-docker compose exec db psql -U padosi -d padosipro -c "
-  select c.sort_order, c.name as category, count(t.id) as tasks
-  from task_categories c left join tasks t on t.category_id = c.id
-  group by c.id, c.sort_order, c.name order by c.sort_order;"
-```
-
-Against whatever `backend/.env` points at (Supabase included), with no psql needed:
+### Check it worked
 
 ```bash
-cd backend
-npx prisma migrate status     # every migration applied?
-npm run prisma:studio         # browse the tables in a browser
+curl http://localhost:4000/health
+docker compose exec db psql -U padosi -d padosipro -c \
+  "select c.name, count(t.id) from task_categories c
+   left join tasks t on t.category_id=c.id group by c.id, c.name order by c.name;"
 ```
 
-Expected: **6 categories / 28 tasks**. The seed is idempotent — it upserts, so re-running
-`npm run db:seed` leaves the counts unchanged and refreshes any edited description.
+### End-to-end in one script
 
-## Database workflow
+Walks register → verify → login → profile → task selection → logout, asserting all 24 steps:
 
 ```bash
-cd backend
-npm run prisma:generate   # regenerate the typed client after editing the schema
-npm run prisma:migrate    # create + apply a migration in development
-npm run prisma:deploy     # apply existing migrations (CI, containers, Supabase)
-npm run db:seed           # idempotent catalogue seed
-npm run prisma:studio     # browse the data
-npm run db:reset          # drop, re-migrate and re-seed (destructive)
+./scripts/smoke-auth.sh
 ```
 
-The schema lives in [`backend/prisma/schema.prisma`](backend/prisma/schema.prisma). Prisma cannot
-express CHECK constraints, so the lowercase-email and `+91` mobile checks are appended by hand to
-`prisma/migrations/*/migration.sql`.
+---
 
-### Pointing at Supabase
+## 3. Using Supabase instead of Docker Postgres
 
-Supabase's direct host (`db.<ref>.supabase.co`) resolves to **IPv6 only**. On an IPv4-only network
-it fails with `ENOTFOUND`, so use the **session pooler** connection string instead — port 5432, user
-`postgres.<project-ref>`, host `aws-0-<region>.pooler.supabase.com`. Copy it from the Supabase
-dashboard: *Connect → Session pooler*. Set `DB_SSL=true` alongside it. Avoid the transaction pooler
-(6543) for migrations; it disables the prepared statements Prisma Migrate needs.
+Supabase is used as **plain PostgreSQL over a connection string** — no `supabase-js`, no Supabase
+Auth, no RLS. Only `DATABASE_URL` and `DB_SSL` change.
 
-```bash
-cd backend
-npm run prisma:deploy
-npm run db:seed
-```
+1. Supabase dashboard → **Connect** → **Session pooler** → copy the URI. It looks like:
 
-## Run it without Docker
+   ```
+   postgres://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
+   ```
 
-```bash
-npm run setup                      # installs backend + mobile deps
+2. Put it in `backend/.env` with TLS on:
 
-cp backend/.env.example backend/.env
-docker compose up -d db            # or point DATABASE_URL at your own Postgres
-npm run dev                        # API on http://localhost:4000
-```
+   ```bash
+   cp backend/.env.example backend/.env
+   # then edit:
+   DATABASE_URL=postgres://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
+   DB_SSL=true
+   ```
 
-`DATABASE_URL` in `backend/.env` can point at the Docker Postgres above or at a
-Supabase project (Project Settings → Database → Connection string → URI). We talk
-to Supabase as plain Postgres over that connection string — no `supabase-js`.
+3. Apply the schema and seed, then run:
 
-## Auth API
+   ```bash
+   cd backend
+   npm install
+   npm run prisma:deploy
+   npm run db:seed
+   npm run dev            # API on http://localhost:4000
+   ```
 
-All routes are under `/api/auth` and rate limited to 30 requests per 15 minutes per IP.
+**Use the session pooler, not the direct host.** `db.<ref>.supabase.co` is IPv6-only and fails with
+`ENOTFOUND` on an IPv4 network. Avoid the *transaction* pooler (port 6543) too — it disables the
+prepared statements Prisma Migrate needs.
 
-| Route | Body | Success | Notable failures |
-| --- | --- | --- | --- |
-| `POST /register` | `{ email, password }` | `201` + `otpExpiresAt`, `resendAvailableAt` | `409 EMAIL_TAKEN`, `400 VALIDATION_ERROR` |
-| `POST /verify-otp` | `{ email, code }` | `200` + `{ token, user }` (auto-login) | `400 OTP_INVALID` (+`details.attemptsLeft`), `400 OTP_EXPIRED`, `429 OTP_LOCKED`, `409 OTP_ALREADY_USED` |
-| `POST /resend-otp` | `{ email }` | `200` + `otpExpiresAt`, `resendAvailableAt` | `429 OTP_COOLDOWN` (+`details.retryAfterSeconds`) |
-| `POST /login` | `{ email, password }` | `200` + `{ token, user }` | `401 INVALID_CREDENTIALS`, `403 EMAIL_NOT_VERIFIED` |
-| `POST /logout` | — (Bearer token) | `200 { ok: true }` | `401 TOKEN_REVOKED` / `TOKEN_INVALID` |
+---
 
-Passwords need 8+ characters with a letter and a number, and are stored with bcrypt cost 12.
-Codes are 6 digits, valid 10 minutes, single use, 5 wrong attempts before the code locks, and a
-30-second resend cooldown. Only `HMAC-SHA256(code, OTP_PEPPER)` is stored — never the code.
-Registering again with an unverified email updates the password and resends, respecting the cooldown.
+## 4. Environment variables
 
-`POST /logout` increments `token_version`, so every token issued before it stops working.
+Every variable the server reads is in [`backend/.env.example`](backend/.env.example) with a
+one-line comment. Nothing real is ever committed. The server validates all of them with zod at boot
+and refuses to start with a message naming each bad one.
 
-## Authenticated API
-
-Everything below needs `Authorization: Bearer <token>`.
-
-| Route | Body | Returns |
+| Variable | Default | What it is |
 | --- | --- | --- |
-| `GET /api/me` | — | `{ user, profile \| null, selectedTaskCount }` |
-| `GET /api/profile` | — | `{ profile }`, or `{ profile: null }` before the first save |
-| `PUT /api/profile` | `{ fullName, mobile, address, businessName? }` | `{ profile }` |
-| `GET /api/tasks` | — | `{ categories: [{ id, name, sortOrder, tasks }] }`, categories in `sortOrder` |
-| `GET /api/me/tasks` | — | `{ tasks }`, each with `categoryId` and `categoryName` |
-| `PUT /api/me/tasks` | `{ taskIds: number[] }` | `{ tasks }` — replaces the whole selection |
+| `NODE_ENV` | `development` | `development` \| `test` \| `production`. |
+| `PORT` | `4000` | Port the API listens on. |
+| `DATABASE_URL` | — | **Required.** Plain Postgres connection string — Docker or Supabase. |
+| `DB_SSL` | `false` | `false` for local Docker, `true` for Supabase. Explicit rather than guessed from the host name. |
+| `TEST_DATABASE_URL` | unset | Throwaway database for the integration tests. Unset → they skip. |
+| `TEST_DB_SSL` | `false` | TLS for the test database only. `DB_SSL` is deliberately ignored during tests. |
+| `JWT_SECRET` | — | **Required**, min 16 chars. Signing key. `openssl rand -base64 32`. |
+| `JWT_EXPIRES_IN` | `7d` | Token lifetime (`15m`, `24h`, `7d`). |
+| `OTP_PEPPER` | — | **Required**, min 16 chars. Server-side secret mixed into the OTP hash. |
+| `MAIL_DRIVER` | `console` | `console` logs the OTP; `emailjs` sends real mail. |
+| `EMAILJS_SERVICE_ID` | — | Required when `MAIL_DRIVER=emailjs`. |
+| `EMAILJS_TEMPLATE_ID` | — | ditto |
+| `EMAILJS_PUBLIC_KEY` | — | ditto |
+| `EMAILJS_PRIVATE_KEY` | — | ditto. Server-only; never reaches the app. |
 
-Profile rules: `fullName` 2–80 characters (letters, spaces, `.`, `'`, `-`; any script, so Devanagari
-works), `address` 10–300 characters, `businessName` optional up to 100. `mobile` accepts what people
-actually type — `9876543210`, `+919876543210`, `+91 98765 43210`, `098765-43210` — and is stored as
-`+91XXXXXXXXXX`, rejecting anything whose first digit is below 6. Omitting `businessName` on a `PUT`
-clears a stored one, so the saved profile always matches the form that was submitted.
+Mobile has one, in [`mobile/.env.example`](mobile/.env.example):
 
-Task selection needs at least one id, rejects duplicates (`DUPLICATE_TASK_IDS`) and unknown ids
-(`UNKNOWN_TASK_IDS` — the offending ids are listed in `fields.taskIds`), and replaces the previous
-selection inside one transaction.
+| Variable | What it is |
+| --- | --- |
+| `EXPO_PUBLIC_API_URL` | Base URL of the API. **No trailing slash.** See [§5](#5-mobile-app). |
 
-### Smoke test
+---
 
-With the stack running, this walks register → verify → login → profile → task selection → logout,
-asserting the status of all 24 steps:
+## 5. Mobile app
 
 ```bash
-./scripts/smoke-auth.sh                       # throwaway email, code read from the API log
-./scripts/smoke-auth.sh you@example.com       # a real inbox (needs MAIL_DRIVER=emailjs)
+cd mobile
+npm install
+cp .env.example .env     # then set EXPO_PUBLIC_API_URL for your setup — see the table
+npx expo start
 ```
 
-## Email (OTP delivery)
+Press `a` for an Android emulator, `i` for an iOS simulator, or scan the QR code with **Expo Go**.
 
-`MAIL_DRIVER=console` (the default) prints the code to the server log — nothing to configure:
+### Pick the right API URL
+
+`localhost` inside an emulator or phone means *that device*, not your machine. This is the single
+most common reason the app shows "Cannot reach PadosiPro".
+
+| Running the app on | `EXPO_PUBLIC_API_URL` |
+| --- | --- |
+| Android emulator | `http://10.0.2.2:4000` |
+| iOS simulator | `http://localhost:4000` |
+| Physical phone, same Wi-Fi as your machine | `http://<your-LAN-IP>:4000` (e.g. `http://192.168.1.20:4000`) |
+| Physical phone, different network, or an APK | your deployed HTTPS URL |
+
+Find your LAN IP with `ipconfig` (Windows) or `ifconfig | grep inet` (macOS/Linux). `EXPO_PUBLIC_*`
+values are **inlined at bundle time**, so restart `expo start` after changing `.env`.
+
+Every screen is native React Native — no WebView. Styling is Tailwind through
+[NativeWind](https://nativewind.dev); brand tokens live in
+[`mobile/global.css`](mobile/global.css), so `text-primary` is the PadosiPro green `#155C49`.
+
+The signed-in token is kept in `expo-secure-store` (Keychain / Keystore), so a logged-in user stays
+logged in across restarts.
+
+> **Note:** `expo-secure-store` has no web implementation — `npx expo start --web` will fail at
+> sign-in. The brief asks for a native app; use an emulator or a phone.
+
+---
+
+## 6. How email is sent
+
+Two drivers, chosen by `MAIL_DRIVER`. **The brief asks us to say which is used: by default, none —
+the OTP is written to the server log, and EmailJS is the opt-in real-mail path.**
+
+### `console` (default, no account needed)
 
 ```bash
 docker compose logs api | grep 'mail:console'
 # [mail:console] OTP for you@example.com: 296189 (valid 10 minutes)
 ```
 
-### Setting up EmailJS for real mail
+This is the fastest way to review the whole flow, and is what makes `docker compose up` sufficient.
 
-1. **Create an account** at [emailjs.com](https://www.emailjs.com) and sign in.
-2. **Add an email service.** *Email Services → Add New Service* → pick your provider (Gmail is
-   quickest; it opens an OAuth consent screen). Copy the **Service ID** — it looks like
-   `service_ab12cde` → `EMAILJS_SERVICE_ID`.
-3. **Create the template.** *Email Templates → Create New Template*. The server sends exactly three
-   `template_params`, so use these names verbatim:
+### `emailjs` (real mail)
+
+The EmailJS REST API is called **server-side only**, so the private key never ships in the app
+bundle.
+
+1. **Account** — sign up at [emailjs.com](https://www.emailjs.com).
+2. **Email service** — *Email Services → Add New Service* → pick a provider (Gmail is quickest).
+   Copy the **Service ID** (`service_ab12cde`) → `EMAILJS_SERVICE_ID`.
+3. **Template** — *Email Templates → Create New Template*. The server sends exactly these three
+   `template_params`; the names must match verbatim:
 
    | Template variable | What the server sends |
    | --- | --- |
-   | `{{to_email}}` | the recipient's address |
-   | `{{otp_code}}` | the 6-digit code |
+   | `{{email}}` | the recipient's address |
+   | `{{otp}}` | the 6-digit code |
    | `{{expiry_minutes}}` | `10` |
 
-   In the template's **Settings → To Email** field put `{{to_email}}`, otherwise EmailJS sends every
-   code to your own address. Subject: `Your PadosiPro verification code`. Body, for example:
+   Set **To Email** to `{{email}}`, or EmailJS sends every code to your own address. Example body:
 
-   > Your PadosiPro verification code is **{{otp_code}}**.
+   > Your PadosiPro verification code is **{{otp}}**.
    > It expires in {{expiry_minutes}} minutes. You don't manage tasks — we do.
 
    Copy the **Template ID** (`template_xy34zab`) → `EMAILJS_TEMPLATE_ID`.
-4. **Copy the keys.** *Account → General → Public Key* → `EMAILJS_PUBLIC_KEY`.
+
+   Any variable the template uses but the server does not send renders **blank** — EmailJS does not
+   error. Keep the template to the three names above.
+4. **Keys** — *Account → General → Public Key* → `EMAILJS_PUBLIC_KEY`.
    *Account → Security → Private Key* → `EMAILJS_PRIVATE_KEY`.
-5. **Allow non-browser use — this is the step people miss.** *Account → Security* → tick
-   **"Allow EmailJS API for non-browser applications"**. EmailJS blocks server-side calls by
-   default and returns `403 API calls are disabled for non-browser applications`, which our API
-   surfaces as `502 MAIL_FAILED`. While you are on that screen, leave **Use Private Key** enabled
-   so the `accessToken` we send is accepted.
+5. **Allow non-browser use — the step people miss.** *Account → Security* → tick **"Allow EmailJS
+   API for non-browser applications"**. Without it EmailJS returns
+   `403 API calls are disabled for non-browser applications`, which the API surfaces as
+   `502 MAIL_FAILED`.
 6. **Switch the driver** in `backend/.env` and restart:
 
    ```bash
@@ -201,52 +235,176 @@ docker compose logs api | grep 'mail:console'
    EMAILJS_PRIVATE_KEY=...
    ```
 
-   The server refuses to boot on `MAIL_DRIVER=emailjs` with any of the four missing, naming each one.
-   Keys stay server-side; the mobile app never sees them.
+   The server refuses to boot on `MAIL_DRIVER=emailjs` with any of the four missing, naming each.
 
-## Mobile app
+> **Deploying?** `MAIL_DRIVER` defaults to `console`. If it is not set explicitly in your host's
+> environment, the deployed API logs OTPs instead of mailing them — with no error.
+
+---
+
+## 7. Building the APK
+
+The app is configured for [EAS Build](https://docs.expo.dev/build/introduction/). The `preview`
+profile in [`mobile/eas.json`](mobile/eas.json) sets `"buildType": "apk"`, so it produces an
+installable `.apk` rather than an `.aab`.
 
 ```bash
-npm run dev:mobile                 # or: cd mobile && npx expo start
+cd mobile
+npm install -g eas-cli      # or use npx eas-cli below
+npx eas-cli login           # a free Expo account
+npx eas-cli init            # once per project: writes extra.eas.projectId into app.json
+npx eas build -p android --profile preview
 ```
 
-Then scan the QR code with Expo Go, or press `a` / `i` for Android or iOS.
-The app currently renders a single screen reading **PadosiPro**.
+EAS builds in the cloud and prints a download link when it finishes (typically 10–20 minutes).
+Install the APK on any Android device — it is unsigned for the Play Store but fine for sideloading.
 
-Styling is Tailwind, via [NativeWind](https://nativewind.dev) — real React Native views with
-`className`, no WebView. Brand tokens live in [`mobile/global.css`](mobile/global.css), so
-`text-primary` is the PadosiPro green:
+**Point it at a reachable API first.** An APK cannot use `localhost`. The `preview` profile sets:
 
-```tsx
-<Text className="text-3xl font-bold text-primary">PadosiPro</Text>
+```json
+"env": { "EXPO_PUBLIC_API_URL": "https://padosi-pro.onrender.com" }
 ```
 
-## Scripts
+Change that to your own deployed URL before building. `mobile/.env` is **not** uploaded to EAS
+(it is gitignored), which is exactly why the value lives in `eas.json`.
 
-Run from the repo root; each delegates to `backend/` and `mobile/`.
+| App identity | Value |
+| --- | --- |
+| Display name | PadosiPro |
+| Android package / iOS bundle | `com.padosipro.assignment` |
+| Brand colour (splash, adaptive icon, `primaryColor`) | `#155C49` |
+| Icons | placeholders in `mobile/assets/` — replace before any real release |
+
+---
+
+## 8. Tests
+
+```bash
+cd backend
+npm test              # 56 unit tests; integration skips without a test database
+npm run test:coverage # same, plus a coverage summary
+npm run lint
+npm run build         # typecheck
+```
+
+Unit tests cover the risky logic with no database and no clock: OTP generation (six digits,
+zero-padded, crypto-sourced), expiry boundaries, the 5-attempt lock, single use, resend cooldown,
+login rules, JWT `token_version`, mobile normalisation and password policy.
+
+### Integration tests
+
+These drive real HTTP against a real Postgres. They **skip automatically** unless
+`TEST_DATABASE_URL` is set, so `npm test` stays green with nothing running.
+
+```bash
+# from the repo root — an ephemeral database on 5433, behind a compose profile
+docker compose --profile test up -d db-test
+
+cd backend
+export TEST_DATABASE_URL=postgres://padosi:padosi@localhost:5433/padosipro_test
+
+# DB_SSL=false matters: the local test server speaks plaintext, and if your .env points at
+# Supabase (DB_SSL=true) these two CLI steps would otherwise fail with a TLS error.
+DATABASE_URL=$TEST_DATABASE_URL DB_SSL=false npx prisma migrate deploy
+DATABASE_URL=$TEST_DATABASE_URL DB_SSL=false npm run db:seed
+
+npm test          # 64 tests, integration included
+```
+
+<details>
+<summary>PowerShell equivalent</summary>
+
+```powershell
+$env:TEST_DATABASE_URL = "postgres://padosi:padosi@localhost:5433/padosipro_test"
+$env:DATABASE_URL = $env:TEST_DATABASE_URL; $env:DB_SSL = "false"
+npx prisma migrate deploy
+npm run db:seed
+Remove-Item Env:DATABASE_URL
+npm test
+```
+
+</details>
+
+The test run itself needs no `DB_SSL`: `tests/setup.ts` forces the database connection from
+`TEST_DATABASE_URL` / `TEST_DB_SSL` and ignores `.env`, so a stray test can never reach real data.
+
+`db-test` is behind the `test` profile, so a plain `docker compose up` never starts it, and its data
+lives in tmpfs so every run begins empty. The suite covers register → verify → login → profile →
+task selection, plus the attempt lock, resend-clears-attempts, identical answers for an unknown
+email and a wrong password, and `token_version` revocation after logout. The mailer is stubbed to
+capture the code, since only its HMAC reaches the database.
+
+CI runs all of this on every push — see [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+---
+
+## 9. API reference
+
+All auth routes are under `/api/auth`, rate limited to 30 requests / 15 minutes / IP.
+
+| Route | Body | Success | Notable failures |
+| --- | --- | --- | --- |
+| `POST /register` | `{ email, password }` | `201` + `otpExpiresAt`, `resendAvailableAt` | `409 EMAIL_TAKEN`, `400 VALIDATION_ERROR` |
+| `POST /verify-otp` | `{ email, code }` | `200` + `{ token, user }` (auto-login) | `400 OTP_INVALID` (+`details.attemptsLeft`), `400 OTP_EXPIRED`, `429 OTP_LOCKED`, `409 OTP_ALREADY_USED` |
+| `POST /resend-otp` | `{ email }` | `200` + `otpExpiresAt`, `resendAvailableAt` | `429 OTP_COOLDOWN` (+`details.retryAfterSeconds`) |
+| `POST /login` | `{ email, password }` | `200` + `{ token, user }` | `401 INVALID_CREDENTIALS`, `403 EMAIL_NOT_VERIFIED` |
+| `POST /logout` | — (Bearer) | `200 { ok: true }` | `401 TOKEN_REVOKED` |
+
+Everything below needs `Authorization: Bearer <token>`.
+
+| Route | Body | Returns |
+| --- | --- | --- |
+| `GET /api/me` | — | `{ user, profile \| null, selectedTaskCount }` |
+| `GET /api/profile` | — | `{ profile }`, or `{ profile: null }` before the first save |
+| `PUT /api/profile` | `{ fullName, mobile, address, businessName? }` | `{ profile }` |
+| `GET /api/tasks` | — | `{ categories: [{ id, name, sortOrder, tasks }] }` |
+| `GET /api/me/tasks` | — | `{ tasks }`, each with `categoryId` and `categoryName` |
+| `PUT /api/me/tasks` | `{ taskIds: number[] }` | `{ tasks }` — replaces the whole selection |
+
+Every failure uses one shape:
+
+```json
+{ "error": { "code": "OTP_INVALID", "message": "That code is not right.",
+             "details": { "attemptsLeft": 4 } } }
+```
+
+`code` is a stable string the client branches on, `message` is safe to show a user, `fields` carries
+per-field validation errors, `details` carries machine-readable extras.
+
+Passwords need 8+ characters with a letter and a number, stored with bcrypt cost 12. Codes are
+6 digits, valid 10 minutes, single use, 5 wrong attempts before locking, 30-second resend cooldown.
+Only `HMAC-SHA256(code, OTP_PEPPER)` is stored.
+
+Profile rules: `fullName` 2–80 characters (letters, spaces, `.`, `'`, `-`, any script, so Devanagari
+works), `address` 10–300, `businessName` optional up to 100. `mobile` accepts `9876543210`,
+`+919876543210`, `+91 98765 43210` or `098765-43210` and stores `+91XXXXXXXXXX`.
+
+---
+
+## 10. Repo scripts
+
+Run from the root; each delegates to `backend/` and `mobile/`.
 
 | Script | What it does |
 | --- | --- |
 | `npm run setup` | Install dependencies in both packages |
-| `npm run dev` | Start the API in watch mode |
-| `npm run dev:mobile` | Start the Expo dev server |
+| `npm run dev` | API in watch mode |
+| `npm run dev:mobile` | Expo dev server |
 | `npm run build` | Compile the API, typecheck the app |
-| `npm test` | Run tests |
+| `npm test` | Tests in both packages |
 | `npm run lint` | Lint both packages |
 
-## Environment
+Database workflow lives in `backend/`:
 
-Every variable the server reads is listed with a comment in
-[`backend/.env.example`](backend/.env.example). Real values never get committed. The server
-validates all of them at boot and refuses to start with a message naming each bad variable.
+```bash
+npm run prisma:generate   # regenerate the typed client after editing the schema
+npm run prisma:migrate    # create + apply a migration in development
+npm run prisma:deploy     # apply existing migrations (CI, containers, Supabase)
+npm run db:seed           # idempotent catalogue seed
+npm run prisma:studio     # browse the data
+npm run db:reset          # drop, re-migrate, re-seed (destructive)
+```
 
-| Variable | Notes |
-| --- | --- |
-| `DATABASE_URL` | Plain Postgres connection string — local Docker or Supabase. |
-| `DB_SSL` | `false` for local Docker, `true` for Supabase. |
-| `JWT_SECRET` / `JWT_EXPIRES_IN` | Token signing key (min 16 chars) and lifetime, default `7d`. |
-| `OTP_PEPPER` | Server-side secret mixed into the OTP hash (min 16 chars). |
-| `MAIL_DRIVER` | `console` (default) logs the OTP; `emailjs` sends real mail and then requires the four `EMAILJS_*` values. |
-
-With the default `MAIL_DRIVER=console`, OTPs are printed to `docker compose logs api` — no email
-account needed to run the flow.
+The schema is [`backend/prisma/schema.prisma`](backend/prisma/schema.prisma). Prisma cannot express
+CHECK constraints, so the lowercase-email and `+91` mobile checks are appended by hand to the
+generated `prisma/migrations/*/migration.sql`.

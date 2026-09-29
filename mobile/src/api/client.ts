@@ -1,7 +1,5 @@
 import { z } from 'zod';
 
-// Trailing slashes are stripped: every path here starts with one, and a base URL ending in "/"
-// would produce "//api/..." — which Express 404s rather than routing.
 const BASE_URL = (process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:4000');
 
 const errorBodySchema = z.object({
